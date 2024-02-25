@@ -131,3 +131,10 @@ dmypy.json
 # Pyre type checker
 .pyre/
 save/
+
+datasets/
+
+features.pkl
+loss.pkl
+losses_process.ipynb
+train_loader.pkl

@@ -6,7 +6,7 @@ import argparse
 import time
 import math
 
-import tensorboard_logger as tb_logger
+# import tensorboard_logger as tb_logger
 import torch
 import torch.backends.cudnn as cudnn
 from torchvision import transforms, datasets
@@ -201,24 +201,29 @@ def train(train_loader, model, criterion, optimizer, epoch, opt):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
-
+    #batch_size: 1024
     end = time.time()
     for idx, (images, labels) in enumerate(train_loader):
         data_time.update(time.time() - end)
-
+        #images length: 2048
         images = torch.cat([images[0], images[1]], dim=0)
         if torch.cuda.is_available():
             images = images.cuda(non_blocking=True)
             labels = labels.cuda(non_blocking=True)
+        #bsz: 1024
         bsz = labels.shape[0]
 
         # warm-up learning rate
         warmup_learning_rate(opt, epoch, idx, len(train_loader), optimizer)
 
         # compute loss
+        # features: [2048, 128]
         features = model(images)
+        #f1, f2: [1024, 128], [1024, 128]
         f1, f2 = torch.split(features, [bsz, bsz], dim=0)
+        #같은 쌍끼리 묶음 [1024, 2, 128]
         features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+
         if opt.method == 'SupCon':
             loss = criterion(features, labels)
         elif opt.method == 'SimCLR':
@@ -265,7 +270,7 @@ def main():
     optimizer = set_optimizer(opt, model)
 
     # tensorboard
-    logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
+    # logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
 
     # training routine
     for epoch in range(1, opt.epochs + 1):
@@ -278,8 +283,8 @@ def main():
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
 
         # tensorboard logger
-        logger.log_value('loss', loss, epoch)
-        logger.log_value('learning_rate', optimizer.param_groups[0]['lr'], epoch)
+        # logger.log_value('loss', loss, epoch)
+        # logger.log_value('learning_rate', optimizer.param_groups[0]['lr'], epoch)
 
         if epoch % opt.save_freq == 0:
             save_file = os.path.join(

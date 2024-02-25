@@ -46,46 +46,71 @@ class SupConLoss(nn.Module):
             raise ValueError('Cannot define both `labels` and `mask`')
         elif labels is None and mask is None:
             mask = torch.eye(batch_size, dtype=torch.float32).to(device)
+        #!
         elif labels is not None:
+            #[1024] -> [1024, 1]
             labels = labels.contiguous().view(-1, 1)
             if labels.shape[0] != batch_size:
                 raise ValueError('Num of labels does not match num of features')
+            #[1024, 1] -> [1, 1024] == [1024, 1024]
+            #같은 클래스인지 아닌지에 대한 mask
+            #0번 행은 7번 레이블
+            #0번 행의 k번째 열이 1이면, k번째 행도 7번 레이블
             mask = torch.eq(labels, labels.T).float().to(device)
         else:
             mask = mask.float().to(device)
 
         contrast_count = features.shape[1]
+        #torch.unbind -> [1024, 2, 128] -> ([1024, 128], [1024, 128]) 튜플로 변환
+        #contrast_feature -> [2048, 128], 쌍이아닌 첫 1024는 첫번째 transformed, 나머지 1024는 두번째 transformed
         contrast_feature = torch.cat(torch.unbind(features, dim=1), dim=0)
         if self.contrast_mode == 'one':
+            #첫번째 transformed image를 anchor로 사용 [1024, 128]
             anchor_feature = features[:, 0]
             anchor_count = 1
         elif self.contrast_mode == 'all':
+            #모든 transformed image를 anchor로 사용 [1024, 128] 
             anchor_feature = contrast_feature
+            # 2
             anchor_count = contrast_count
         else:
             raise ValueError('Unknown mode: {}'.format(self.contrast_mode))
 
         # compute logits
+        # all case
+        # [2048, 128] * [128, 2048] -> [2048, 2048]
+        # 모든 벡터에 대해 내적 (dot product)를 계산
+        # 모든 내적값을 온도만큼 나눔
         anchor_dot_contrast = torch.div(
             torch.matmul(anchor_feature, contrast_feature.T),
             self.temperature)
         # for numerical stability
+        # logits_max -> diagonal value
+        # _ -> 행 번호
         logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
         logits = anchor_dot_contrast - logits_max.detach()
 
         # tile mask
+        # mask -> [1024, 1024] -> [2408, 2048], 그냥 이어 붙임
         mask = mask.repeat(anchor_count, contrast_count)
         # mask-out self-contrast cases
+        # 모든 요소가 1인 [2048, 2048] 만든 뒤, diagonal value -> 0
+        # logits_mask -> [2048, 2048]
         logits_mask = torch.scatter(
             torch.ones_like(mask),
             1,
             torch.arange(batch_size * anchor_count).view(-1, 1).to(device),
             0
         )
+        #mask: 본인과의 비교와 같은 Label끼리의 비교는 1, 나머지는 0
+        #logits_mask: 본인과의 비교는 0, 나머지는 1
+        #본인을 제외한 같은 Label은 1, 본인 포함 다른 Label은 0
         mask = mask * logits_mask
 
         # compute log_prob
+        # exp_logits -> [2048, 2048]
         exp_logits = torch.exp(logits) * logits_mask
+        # logits에서 exp_logits행의 합의 로그를 뺌
         log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))
 
         # compute mean of log-likelihood over positive
@@ -94,13 +119,20 @@ class SupConLoss(nn.Module):
         # Edge case e.g.:- 
         # features of shape: [4,1,...]
         # labels:            [0,1,1,2]
-        # loss before mean:  [nan, ..., ..., nan] 
+        # loss before mean:  [nan, ..., ..., nan]
+
+        # mask_pos_pairs -> [2048], 각 행의 1의 개수 (본인 포함 같은 pair의 개수)
         mask_pos_pairs = mask.sum(1)
+        #값이 작으면 1로 대체 (오류 관련)
         mask_pos_pairs = torch.where(mask_pos_pairs < 1e-6, 1, mask_pos_pairs)
+        # mean_log_prob_pos -> [2048], 각 행의 mask * log_prob의 합을 mask_pos_pairs로 나눔
         mean_log_prob_pos = (mask * log_prob).sum(1) / mask_pos_pairs
 
         # loss
         loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos
+        # loss.view(anchor_count, batch_size) -> [2, 1024]
+        # loss.view(anchor_count, batch_size).mean() -> [1]
         loss = loss.view(anchor_count, batch_size).mean()
 
+        #[2, 1024]에서 각 행에 대한 평균을 구한 뒤, 두 행에 대한 평균을 구함
         return loss
